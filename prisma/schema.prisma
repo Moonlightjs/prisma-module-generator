@@ -1,0 +1,100 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator module_generator {
+  provider = "node ./dist/generator.js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleType {
+  DECIMAL
+  VARCHAR
+  TEXT
+  DATETIME
+  BOOLEAN
+}
+
+model Company {
+  id    Int    @id @default(autoincrement())
+  name  String
+  users User[]
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  name      String?
+  role      RoleType
+  posts     Post[]
+  companyId Int
+  company   Company   @relation(fields: [companyId], references: [id])
+  comment   Comment[]
+}
+
+model Post {
+  id        Int       @id @default(autoincrement())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  title     String
+  content   String?
+  published Boolean   @default(false)
+  viewCount Int       @default(0)
+  author    User?     @relation(fields: [authorId], references: [id])
+  authorId  Int?
+  rating    Float
+  comment   Comment[]
+}
+
+model Comment {
+  id       Int    @id @default(autoincrement())
+  content  String
+  post     Post   @relation(fields: [postId], references: [id])
+  postId   Int
+  author   User   @relation(fields: [authorId], references: [id])
+  authorId Int
+}
+
+enum TestEnum {
+  morning
+  afternoon
+  evening
+}
+
+model Test {
+  id        String   @id @default(uuid()) @db.Uuid()
+  uuid      String   @db.Uuid()
+  shortText String   @unique @default("1") @db.VarChar(255)
+  longText  String   @db.Text
+  integer   Int      @default(232)
+  bigint    BigInt
+  decimal   Decimal  @db.Decimal(10, 2)
+  float     Float
+  date      DateTime @db.Date
+  datetime  DateTime @db.Timestamp()
+  time      DateTime @db.Time()
+  boolean   Boolean
+  json      Json     @db.JsonB
+  enum      TestEnum
+}
+
+model TestNullable {
+  id        String   @id @default(uuid()) @db.Uuid()
+  uuid      String?   @db.Uuid()
+  shortText String?   @unique @default("1") @db.VarChar(255)
+  longText  String?   @db.Text
+  integer   Int?      @default(232)
+  bigint    BigInt?
+  decimal   Decimal?  @db.Decimal(10, 2)
+  float     Float?
+  date      DateTime? @db.Date
+  datetime  DateTime? @db.Timestamp()
+  time      DateTime? @db.Time()
+  boolean   Boolean?
+  json      Json?     @db.JsonB
+  enum      TestEnum?
+}
