@@ -3,7 +3,7 @@ import { generate } from './prisma-generator';
 
 generatorHandler({
   onManifest: () => ({
-    defaultOutput: './generated',
+    defaultOutput: '../src/@generated',
     prettyName: 'Prisma Module Generator',
     requiresGenerators: ['prisma-client-js'],
   }),

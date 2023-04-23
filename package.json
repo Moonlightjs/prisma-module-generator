@@ -1,6 +1,6 @@
 {
   "name": "@moonlightjs/prisma-module-generator",
-  "version": "0.1.1-beta.0",
+  "version": "0.1.1-beta.1",
   "main": "index.js",
   "types": "index.d.ts",
   "repository": {
@@ -16,27 +16,22 @@
     "name": "thangho98",
     "url": "https://thangho98.github.io/"
   },
-  "standard-version": {
-    "skip": {
-      "changelog": true,
-      "commit": true
-    }
-  },
   "scripts": {
     "release": "standard-version -a && git push --follow-tags && npm run module && cd module && npm publish --access public",
     "prerelease-alpha": "standard-version --prerelease alpha && git push --follow-tags && npm run module && cd module && npm publish --access public --tag alpha",
-    "prerelease-beta": "standard-version -a --prerelease beta --skip && git git push --follow-tags && npm run module && cd module && npm publish --access public --tag beta",
+    "prerelease-beta": "standard-version -a --prerelease beta && git push --follow-tags && npm run module && cd module && npm publish --access public --tag beta",
     "start": "tsc && npm run prisma generate",
     "prebuild": "rimraf dist",
     "build": "npm run prebuild && tsc --build tsconfig.build.json",
     "format": "prettier --write \"src/**/*.ts\"",
     "prisma": "prisma",
+    "module": "npm run build && node ./module.js",
     "standard-version": "standard-version"
   },
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@moonlightjs/common": "/Users/thawng/Desktop/source/Moonlightjs/common/module",
+    "@moonlightjs/common": "0.1.2-beta.2",
     "@nestjs/config": "^2.3.1",
     "@nestjs/swagger": "^6.3.0",
     "@prisma/client": "^4.0.0",
@@ -59,7 +54,7 @@
     "eslint": "^8.35.0",
     "eslint-config-prettier": "^8.6.0",
     "eslint-plugin-prettier": "^4.2.1",
-    "fs-extra": "^11.1.0",
+    "fs-extra": "^11.1.1",
     "prettier": "^2.8.4",
     "prisma": "^4.0.0",
     "rimraf": "^5.0.0",
