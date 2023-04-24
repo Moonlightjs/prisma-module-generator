@@ -6,7 +6,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { generateControllerFile } from './generate-controller';
 import { generateCreateInput } from './generate-create-input';
-import { generateAdminDto, generateDto, generateDtosIndexFile } from './generate-dto';
+import { generateDto, generateDtosIndexFile } from './generate-dto';
 import generateEnum from './generate-enum';
 import generateEnumFilter from './generate-enum-filter';
 import { generateModuleFile, generateModuleIndexFile } from './generate-module';
@@ -18,7 +18,6 @@ import { project } from './project';
 import { generateOrderByInput } from './generate-order-by';
 import { generateScalarFieldEnum } from './generate-scalar-field-enum';
 import { generateFindArgs } from './generate-find-args';
-import { OptionalKind, ImportDeclarationStructure } from 'ts-morph';
 import generateNamespaceExtraModels from './generate-namespace-extra-model';
 
 export async function generate(options: GeneratorOptions) {
@@ -65,7 +64,6 @@ export async function generate(options: GeneratorOptions) {
       await fs.mkdir(moduleDir, { recursive: true });
       await removeDir(moduleDir, true);
       // gererate dto files
-      await generateAdminDto(project, moduleDir, model, extraModelImports);
       await generateDto(project, moduleDir, model, extraModelImports);
       // await generateCreateAdminInputBase(project, moduleDir, model);
       await generateCreateInput(project, moduleDir, model, prismaClientDmmf, extraModelImports);

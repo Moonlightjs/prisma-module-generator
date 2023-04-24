@@ -18,76 +18,6 @@ import {
   updateSetImports,
 } from './helpers';
 
-export async function generateAdminDto(
-  project: Project,
-  moduleDir: string,
-  model: PrismaDMMF.Model,
-  extraModelImports: Set<ImportDeclarationType>,
-) {
-  const dirPath = path.resolve(moduleDir, 'dto');
-  const filePath = path.resolve(dirPath, `admin-${paramCase(model.name)}.dto.ts`);
-  const sourceFile = project.createSourceFile(filePath, undefined, {
-    overwrite: true,
-  });
-
-  if (shouldImportPrisma(model.fields)) {
-    generatePrismaImport(sourceFile);
-  }
-
-  sourceFile.addImportDeclaration({
-    moduleSpecifier: 'class-transformer',
-    namedImports: ['Type', 'Expose'],
-  });
-  sourceFile.addImportDeclaration({
-    moduleSpecifier: '@nestjs/swagger',
-    namedImports: ['ApiProperty'],
-  });
-
-  const relationImports = new Set<OptionalKind<ImportDeclarationStructure>>();
-  model.fields.forEach((field) => {
-    if (field.relationName && field.kind === 'object' && field.type !== model.name) {
-      relationImports.add({
-        moduleSpecifier: `../../${paramCase(field.type)}/dto/admin-${paramCase(field.type)}.dto`,
-        namedImports: ['Admin' + field.type + 'Dto'],
-      });
-    }
-  });
-  sourceFile.addImportDeclarations(Array.from(relationImports));
-
-  generateEnumImports(sourceFile, model.fields);
-
-  updateSetImports(extraModelImports, {
-    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/admin-${paramCase(model.name)}.dto`,
-    namedImports: new Set([`Admin${model.name}Dto`]),
-  });
-
-  sourceFile.addClass({
-    name: `Admin${model.name}Dto`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      ...model.fields.map<OptionalKind<PropertyDeclarationStructure>>((field) => {
-        return {
-          name: field.name,
-          type: getTSDataTypeAdminDtoFromFieldType(field),
-          hasExclamationToken: !field.default && field.isRequired,
-          hasQuestionToken: !field.isRequired,
-          trailingTrivia: '\r\n',
-          decorators: getDecoratorsAdminDtoByFieldType(field),
-          initializer: field.default ? getDefaultValueFromFieldType(field) : undefined,
-          isReadonly: true,
-          scope: Scope.Public,
-        };
-      }),
-    ],
-  });
-}
-
 export async function generateDto(
   project: Project,
   moduleDir: string,
@@ -95,7 +25,7 @@ export async function generateDto(
   extraModelImports: Set<ImportDeclarationType>,
 ) {
   const dirPath = path.resolve(moduleDir, 'dto');
-  const filePath = path.resolve(dirPath, `${paramCase(model.name)}.dto.ts`);
+  const filePath = path.resolve(dirPath, `${paramCase(model.name)}-full.dto.ts`);
   const sourceFile = project.createSourceFile(filePath, undefined, {
     overwrite: true,
   });
@@ -132,7 +62,7 @@ export async function generateDto(
   });
 
   sourceFile.addClass({
-    name: `${model.name}Dto`,
+    name: `${model.name}FullDto`,
     isExported: true,
     decorators: [
       {
@@ -387,10 +317,7 @@ export const generateDtosIndexFile = (project: Project, moduleDir: string, model
   });
   modelsBarrelExportSourceFile.addExportDeclarations([
     {
-      moduleSpecifier: `./admin-${paramCase(modelName)}.dto`,
-    },
-    {
-      moduleSpecifier: `./${paramCase(modelName)}.dto`,
+      moduleSpecifier: `./${paramCase(modelName)}-full.dto`,
     },
     {
       moduleSpecifier: `./${paramCase(modelName)}-where.input`,

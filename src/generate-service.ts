@@ -19,10 +19,10 @@ import {
   Pagination,
   toDto,
   HttpErrorException,
+  Constructor
 } from '@moonlightjs/common';
 import { PrismaService } from '@moonlightjs/common';
-import { Admin${model.name}Dto } from './dto/admin-${paramCase(model.name)}.dto';
-import { ${model.name}Dto } from './dto/${paramCase(model.name)}.dto';
+import { ${model.name}FullDto } from './dto/${paramCase(model.name)}-full.dto';
 
 const DEFAULT_SKIP = 0;
 const DEFAULT_TAKE = 20;
@@ -33,7 +33,7 @@ export class ${model.name}Service {
 
   async findOne<TDto = any>(
     params: Prisma.${model.name}FindFirstArgs,
-    dtoType: typeof Admin${model.name}Dto | typeof ${model.name}Dto = Admin${model.name}Dto,
+    dtoType: Constructor = ${model.name}FullDto,
   ): Promise<TDto> {
     const ${camelCase(model.name)} = await this.prisma.${camelCase(model.name)}.findFirst(params);
     return toDto<TDto>(dtoType, ${camelCase(model.name)});
@@ -41,7 +41,7 @@ export class ${model.name}Service {
 
   async findAll<TDto = any>(
     params: Prisma.${model.name}FindManyArgs,
-    dtoType: typeof Admin${model.name}Dto | typeof ${model.name}Dto = Admin${model.name}Dto,
+    dtoType: Constructor = ${model.name}FullDto,
   ): Promise<TDto[]> {
     params.skip = params.skip ?? DEFAULT_SKIP;
     params.take = params.take ?? DEFAULT_TAKE;
@@ -55,7 +55,7 @@ export class ${model.name}Service {
 
   async findAllPagination<TDto = any>(
     params: Prisma.${model.name}FindManyArgs,
-    dtoType: typeof Admin${model.name}Dto | typeof ${model.name}Dto = Admin${model.name}Dto,
+    dtoType: Constructor = ${model.name}FullDto,
   ): Promise<PagedResultDto<TDto>> {
     params.skip = params.skip ?? DEFAULT_SKIP;
     params.take = params.take ?? DEFAULT_TAKE;
@@ -86,7 +86,7 @@ export class ${model.name}Service {
 
   async create<TDto = any>(
     params: Prisma.${model.name}CreateArgs,
-    dtoType: typeof Admin${model.name}Dto | typeof ${model.name}Dto = Admin${model.name}Dto,
+    dtoType: Constructor = ${model.name}FullDto,
   ): Promise<TDto> {
     const ${camelCase(model.name)} = await this.prisma.${camelCase(model.name)}.create(params);
     return toDto<TDto>(dtoType, ${camelCase(model.name)});
@@ -94,7 +94,7 @@ export class ${model.name}Service {
 
   async update<TDto = any>(
     params: Prisma.${model.name}UpdateArgs,
-    dtoType: typeof Admin${model.name}Dto | typeof ${model.name}Dto = Admin${model.name}Dto,
+    dtoType: Constructor = ${model.name}FullDto,
   ): Promise<TDto> {
     const ${camelCase(model.name)} = await this.prisma.${camelCase(model.name)}.update(params);
     return toDto<TDto>(dtoType, ${camelCase(model.name)});
