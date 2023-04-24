@@ -47,8 +47,8 @@ export async function generateDto(
   model.fields.forEach((field) => {
     if (field.relationName && field.kind === 'object' && field.type !== model.name) {
       relationImports.add({
-        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}.dto`,
-        namedImports: [field.type + 'Dto'],
+        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}-full.dto`,
+        namedImports: [field.type + 'FullDto'],
       });
     }
   });
@@ -57,8 +57,8 @@ export async function generateDto(
   generateEnumImports(sourceFile, model.fields);
 
   updateSetImports(extraModelImports, {
-    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}.dto`,
-    namedImports: new Set([`${model.name}Dto`]),
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-full.dto`,
+    namedImports: new Set([`${model.name}FullDto`]),
   });
 
   sourceFile.addClass({
@@ -87,54 +87,6 @@ export async function generateDto(
     ],
   });
 }
-
-export const getTSDataTypeAdminDtoFromFieldType = (field: PrismaDMMF.Field) => {
-  let type = field.type;
-  switch (field.type) {
-    case 'Int':
-    case 'Float':
-      type = 'number';
-      break;
-    case 'DateTime':
-      type = 'Date';
-      break;
-    case 'String':
-      type = 'string';
-      break;
-    case 'Boolean':
-      type = 'boolean';
-      break;
-    case 'Decimal':
-      type = 'any';
-      break;
-    case 'Json':
-      type = 'Prisma.JsonValue';
-      break;
-    case 'BigInt':
-      type = 'bigint';
-      break;
-    case 'Bytes':
-      type = `ArrayBuffer`;
-      break;
-    default:
-      // #model
-      if (field.kind === 'object') {
-        console.log(`${field.name} is a relation field that references ${field.type}`);
-        type = `Admin${field.type}Dto`;
-      } else {
-        console.log(`${field.name} is a scalar field`);
-        type = `${field.type}`;
-      }
-      break;
-  }
-  if (!field.isRequired) {
-    type = `${type} | null`;
-  }
-  if (field.isList) {
-    type = `${type}[]`;
-  }
-  return type;
-};
 
 export const getTSDataTypeDtoFromFieldType = (field: PrismaDMMF.Field) => {
   let type = field.type;
@@ -168,7 +120,7 @@ export const getTSDataTypeDtoFromFieldType = (field: PrismaDMMF.Field) => {
       // #model
       if (field.kind === 'object') {
         console.log(`${field.name} is a relation field that references ${field.type}`);
-        type = `${field.type}Dto`;
+        type = `${field.type}FullDto`;
       } else {
         console.log(`${field.name} is a scalar field`);
         type = `${field.type}`;
@@ -182,69 +134,6 @@ export const getTSDataTypeDtoFromFieldType = (field: PrismaDMMF.Field) => {
     type = `${type}[]`;
   }
   return type;
-};
-
-export const getDecoratorsAdminDtoByFieldType = (field: PrismaDMMF.Field) => {
-  const decorators: OptionalKind<DecoratorStructure>[] = [];
-  decorators.push(getDecoratorSwaggerAdminDtoByFieldType(field));
-  decorators.push({
-    name: 'Expose',
-    arguments: [],
-  });
-  return decorators;
-};
-
-export const getDecoratorSwaggerAdminDtoByFieldType = (field: PrismaDMMF.Field): OptionalKind<DecoratorStructure> => {
-  const name = 'ApiProperty';
-  let type = '';
-  let required: 'true' | 'false' = 'true';
-  let nullable: 'true' | 'false' = 'false';
-  if (!field.isRequired) {
-    required = 'false';
-    nullable = 'true';
-  }
-  switch (field.type) {
-    case 'Int':
-    case 'BigInt':
-      type = `'integer'`;
-      break;
-    case 'DateTime':
-      type = `() => Date`;
-      break;
-    case 'String':
-      type = `'string'`;
-      break;
-    case 'Boolean':
-      type = `'boolean'`;
-      break;
-    case 'Float':
-      type = `'float'`;
-      break;
-    case 'Decimal':
-      type = `'double'`;
-      break;
-    case 'Bytes':
-      type = `number'`;
-      break;
-    case 'Json':
-      type = `'object'`;
-      break;
-    default:
-      if (field.kind === 'enum') {
-        type = `'string'`;
-      } else if (field.kind === 'object') {
-        type = `() => Admin${field.type}Dto`;
-      }
-      break;
-  }
-  return {
-    name,
-    arguments: [
-      `{ type: ${type}, required: ${required}, nullable: ${nullable}${field.isList ? ', isArray: true' : ''}${
-        field.kind === `enum` ? `, enum: ${field.type}` : ''
-      } }`,
-    ],
-  };
 };
 
 export const getDecoratorsDtoByFieldType = (field: PrismaDMMF.Field) => {
@@ -296,7 +185,7 @@ export const getDecoratorSwaggerDtoByFieldType = (field: PrismaDMMF.Field): Opti
       if (field.kind === 'enum') {
         type = `'string'`;
       } else if (field.kind === 'object') {
-        type = `() => ${field.type}Dto`;
+        type = `() => ${field.type}FullDto`;
       }
       break;
   }

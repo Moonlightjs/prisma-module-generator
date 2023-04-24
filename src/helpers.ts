@@ -58,7 +58,7 @@ export const getTSDataTypeFromFieldType = (field: PrismaDMMF.Field) => {
       // #model
       if (field.kind === 'object') {
         console.log(`${field.name} is a relation field that references ${field.type}`);
-        type = `${field.type}Dto`;
+        type = `${field.type}FullDto`;
       } else {
         console.log(`${field.name} is a scalar field`);
         type = `${field.type}`;
