@@ -296,3 +296,36 @@ export function generateEnumFiltersIndexFile(sourceFile: SourceFile, enumNames: 
     })),
   );
 }
+
+export function filterRelatedField(
+  field: PrismaDMMF.Field,
+  model: PrismaDMMF.Model,
+  relatedModel: PrismaDMMF.Model,
+): (value: PrismaDMMF.Field, index: number, obj: PrismaDMMF.Field[]) => unknown {
+  return (f) => {
+    if (f.relationName === field.relationName) {
+      if (model.name === relatedModel.name) {
+        if (f.name === field.name) {
+          return false;
+        }
+        return true;
+      }
+      return true;
+    }
+    return false;
+  };
+}
+
+export type ImportDeclarationType = {
+  namedImports: Set<string>;
+  moduleSpecifier: string;
+};
+
+export function updateSetImports(set: Set<ImportDeclarationType>, structure: ImportDeclarationType) {
+  const existing = [...set].find((s) => s.moduleSpecifier === structure.moduleSpecifier);
+  if (existing) {
+    existing.namedImports = new Set([...existing.namedImports, ...structure.namedImports]);
+  } else {
+    set.add(structure);
+  }
+}

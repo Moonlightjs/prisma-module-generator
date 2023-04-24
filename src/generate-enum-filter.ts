@@ -2,8 +2,14 @@ import type { DMMF as PrismaDMMF } from '@prisma/generator-helper';
 import { paramCase } from 'change-case';
 import * as path from 'path';
 import { Project } from 'ts-morph';
+import { ImportDeclarationType, updateSetImports } from './helpers';
 
-export default function generateEnumFilter(project: Project, outputDir: string, enumItem: PrismaDMMF.DatamodelEnum) {
+export default function generateEnumFilter(
+  project: Project,
+  outputDir: string,
+  enumItem: PrismaDMMF.DatamodelEnum,
+  extraModelImports: Set<ImportDeclarationType>,
+) {
   const dirPath = path.resolve(outputDir, 'enums', 'filters');
   const filePath = path.resolve(dirPath, `${paramCase(enumItem.name)}-enum.filter.ts`);
   const sourceFile = project.createSourceFile(filePath, undefined, {
@@ -28,6 +34,15 @@ export default function generateEnumFilter(project: Project, outputDir: string, 
   sourceFile.addImportDeclaration({
     moduleSpecifier: `../${paramCase(enumItem.name)}.enum`,
     namedImports: [`${enumItem.name}`],
+  });
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./enums/filters/${paramCase(enumItem.name)}-enum.filter`,
+    namedImports: new Set([
+      `NestedEnum${enumItem.name}NullableFilter`,
+      `NestedEnum${enumItem.name}Filter`,
+      `Enum${enumItem.name}NullableFilter`,
+      `Enum${enumItem.name}Filter`,
+    ]),
   });
 
   sourceFile.addStatements(

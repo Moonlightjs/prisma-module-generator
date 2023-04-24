@@ -11,18 +11,28 @@ import {
   SourceFile,
 } from 'ts-morph';
 import {
+  ImportDeclarationType,
+  filterRelatedField,
   generateClassValidatorImport,
   generateEnumImports,
   generatePrismaImport,
   getDecoratorsImportsByType,
   shouldImportPrisma,
+  updateSetImports,
 } from './helpers';
+import { generateCreateManyFieldInputEnvelope } from './generate-create-many-field-input-envelope';
+import {
+  generateCreateNestedManyWithoutFieldInputManyToMany,
+  generateCreateNestedManyWithoutFieldInputOneToMany,
+} from './generate-create-nested-many-without-field-input-many-to-many';
+import { generateCreateNestedOneWithoutFieldInput } from './generate-create-nested-one-without-field-input';
 
 export async function generateCreateInput(
   project: Project,
   moduleDir: string,
   model: PrismaDMMF.Model,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) {
   const dirPath = path.resolve(moduleDir, 'dto');
   const filePath = path.resolve(dirPath, `${paramCase(model.name)}-create.input.ts`);
@@ -60,20 +70,27 @@ export async function generateCreateInput(
     namedImports: [`${model.name}WhereUniqueInput`],
   });
 
-  const relationImports = new Set<OptionalKind<ImportDeclarationStructure>>();
+  const relationImports = new Set<ImportDeclarationType>();
   model.fields.forEach((field) => {
     if (field.relationName && field.kind === 'object') {
-      relationImports.add({
-        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}-create.input`,
-        namedImports: [getTSDataTypeInputFromRelationFieldType(model, field, dmmf)],
+      updateSetImports(relationImports, {
+        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(
+          getTSDataTypeInputFromRelationFieldType(model, field, dmmf),
+        ).replace('-input', '.input')}`,
+        namedImports: new Set([getTSDataTypeInputFromRelationFieldType(model, field, dmmf)]),
       });
     }
   });
-  sourceFile.addImportDeclarations(Array.from(relationImports));
+  Array.from(relationImports).forEach((importDeclaration) => {
+    sourceFile.addImportDeclaration({
+      moduleSpecifier: importDeclaration.moduleSpecifier,
+      namedImports: Array.from(importDeclaration.namedImports),
+    });
+  });
 
   generateEnumImports(sourceFile, model.fields);
 
-  generateCreateBaseInput(sourceFile, model);
+  generateCreateBaseInput(sourceFile, model, extraModelImports);
 
   model.fields.forEach((field) => {
     console.log(`model: ${model.name} field: `, field);
@@ -82,23 +99,31 @@ export async function generateCreateInput(
   model.fields
     .filter((field) => field.kind === 'object' && dmmf.datamodel.models.some((model) => model.name === field.type))
     .forEach((field) => {
-      generateCreateWithoutFieldInput(sourceFile, model, field, dmmf);
+      generateCreateWithoutFieldInput(sourceFile, model, field, dmmf, extraModelImports);
       if (field.relationFromFields && field.relationFromFields.length > 0) {
-        generateCreateNestedManyWithoutFieldInputOneToMany(sourceFile, model, field);
+        generateCreateNestedManyWithoutFieldInputOneToMany(project, moduleDir, model, field);
       } else {
-        generateCreateNestedManyWithoutFieldInputManyToMany(sourceFile, model, field);
+        generateCreateNestedManyWithoutFieldInputManyToMany(project, moduleDir, model, field);
       }
 
-      generateCreateNestedOneWithoutFieldInput(sourceFile, model, field);
-      generateCreateOrConnectWithoutFieldInput(sourceFile, model, field);
-      generateCreateManyFieldInputEnvelope(sourceFile, model, field);
-      generateCreateManyFieldInput(sourceFile, model, field, dmmf);
+      generateCreateNestedOneWithoutFieldInput(project, moduleDir, model, field, extraModelImports);
+      generateCreateOrConnectWithoutFieldInput(sourceFile, model, field, extraModelImports);
+      generateCreateManyFieldInputEnvelope(project, moduleDir, model, field, extraModelImports);
+      generateCreateManyFieldInput(sourceFile, model, field, dmmf, extraModelImports);
     });
 
-  generateModelCreateInput(sourceFile, model, dmmf);
+  generateModelCreateInput(sourceFile, model, dmmf, extraModelImports);
 }
 
-export const generateCreateBaseInput = (sourceFile: SourceFile, model: PrismaDMMF.Model) => {
+export const generateCreateBaseInput = (
+  sourceFile: SourceFile,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-create.input`,
+    namedImports: new Set([`${model.name}CreateInputBase`]),
+  });
   sourceFile.addClass({
     name: `${model.name}CreateInputBase`,
     isExported: true,
@@ -135,94 +160,12 @@ export const generateCreateBaseInput = (sourceFile: SourceFile, model: PrismaDMM
   });
 };
 
-export const generateCreateManyFieldInputEnvelope = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}CreateMany${pascalCase(filedIgnore.name)}InputEnvelope`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'data',
-        type: `${model.name}CreateMany${pascalCase(filedIgnore.name)}Input`,
-        hasExclamationToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateMany${pascalCase(
-                filedIgnore.name,
-              )}Input, required: true, nullable: false, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateMany${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsDefined',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'skipDuplicates',
-        type: 'boolean',
-        hasExclamationToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: 'boolean', required: false, nullable: true }`],
-          },
-          {
-            name: 'IsBoolean',
-            arguments: [],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
 export const generateCreateWithoutFieldInput = (
   sourceFile: SourceFile,
   model: PrismaDMMF.Model,
   filedIgnore: PrismaDMMF.Field,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
   sourceFile.addClass({
     name: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`,
@@ -258,6 +201,7 @@ export const generateCreateManyFieldInput = (
   model: PrismaDMMF.Model,
   filedIgnore: PrismaDMMF.Field,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
   sourceFile.addClass({
     name: `${model.name}CreateMany${pascalCase(filedIgnore.name)}Input`,
@@ -296,7 +240,12 @@ export const generateModelCreateInput = (
   sourceFile: SourceFile,
   model: PrismaDMMF.Model,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-create.input`,
+    namedImports: new Set([`${model.name}CreateInput`]),
+  });
   sourceFile.addClass({
     name: `${model.name}CreateInput`,
     extends: `${model.name}CreateInputBase`,
@@ -330,7 +279,12 @@ export const generateCreateOrConnectWithoutFieldInput = (
   sourceFile: SourceFile,
   model: PrismaDMMF.Model,
   filedIgnore: PrismaDMMF.Field,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-create.input`,
+    namedImports: new Set([`${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`]),
+  });
   sourceFile.addClass({
     name: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`,
     isExported: true,
@@ -409,419 +363,6 @@ export const generateCreateOrConnectWithoutFieldInput = (
   });
 };
 
-export const generateCreateNestedManyWithoutFieldInputManyToMany = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}CreateNestedManyWithout${pascalCase(filedIgnore.name)}Input`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connectOrCreate',
-        type: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateOrConnectWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connect',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
-export const generateCreateNestedManyWithoutFieldInputOneToMany = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}CreateNestedManyWithout${pascalCase(filedIgnore.name)}Input`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connectOrCreate',
-        type: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateOrConnectWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'createMany',
-        type: `${model.name}CreateMany${pascalCase(filedIgnore.name)}InputEnvelope`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateMany${pascalCase(
-                filedIgnore.name,
-              )}InputEnvelope, required: false, nullable: true, }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateMany${pascalCase(filedIgnore.name)}InputEnvelope`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connect',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
-export const generateCreateNestedOneWithoutFieldInput = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}CreateNestedOneWithout${pascalCase(filedIgnore.name)}Input`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connectOrCreate',
-        type: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateOrConnectWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connect',
-        type: `${model.name}WhereUniqueInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [''],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
 // generate data type input
 export const getTSDataTypeInputFromScalarAndEnumFieldType = (field: PrismaDMMF.Field) => {
   let type = field.type;
@@ -886,7 +427,7 @@ export const getTSDataTypeInputFromRelationFieldType = (
     if (!relatedModel) {
       throw new Error(`Model ${field.type} not found`);
     }
-    const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
+    const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
     if (relatedField !== undefined) {
       if (field.isList) {
         console.log(

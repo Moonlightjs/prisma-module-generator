@@ -2,7 +2,8 @@
 /dist
 /node_modules
 /module
-/generated
+src/@generated
+test/data.json
 
 # Logs
 logs

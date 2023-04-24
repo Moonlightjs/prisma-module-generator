@@ -11,22 +11,27 @@ import {
   SourceFile,
 } from 'ts-morph';
 import {
+  ImportDeclarationType,
+  filterRelatedField,
   generateClassValidatorImport,
   generateEnumImportsForWhereInput,
   generatePrismaImport,
   getDecoratorsImportsByType,
   shouldImportPrisma,
+  updateSetImports,
 } from './helpers';
 import {
   getDecoratorsInputByScalarAndEnumFieldFieldType,
   getTSDataTypeInputFromScalarAndEnumFieldType,
 } from './generate-create-input';
+import { generateRelationFilter } from './generate-relation-filter';
 
 export async function generateWhereInputs(
   project: Project,
   moduleDir: string,
   model: PrismaDMMF.Model,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) {
   const dirPath = path.resolve(moduleDir, 'dto');
   const filePath = path.resolve(dirPath, `${paramCase(model.name)}-where.input.ts`);
@@ -76,10 +81,31 @@ export async function generateWhereInputs(
   const relationImports = new Set<OptionalKind<ImportDeclarationStructure>>();
   model.fields.forEach((field) => {
     if (field.relationName && field.kind === 'object') {
-      relationImports.add({
-        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}-where.input`,
-        namedImports: getImportDeclarationsFromRelationType(field, dmmf),
-      });
+      const relatedModel = dmmf.datamodel.models.find((model) => model.name === field.type);
+      if (!relatedModel) {
+        throw new Error(`Model ${field.type} not found`);
+      }
+      const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
+      if (relatedField !== undefined) {
+        if (field.isList) {
+          relationImports.add({
+            moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}-relation.filter`,
+            namedImports: [`${relatedModel.name}ListRelationFilter`],
+          });
+        } else {
+          if (field.type !== model.name) {
+            relationImports.add({
+              moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}-where.input`,
+              namedImports: [`${relatedModel.name}WhereInput`],
+            });
+          }
+
+          relationImports.add({
+            moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}-relation.filter`,
+            namedImports: [`${relatedModel.name}RelationFilter`],
+          });
+        }
+      }
     }
   });
 
@@ -87,13 +113,22 @@ export async function generateWhereInputs(
 
   generateEnumImportsForWhereInput(sourceFile, model.fields);
 
-  generateWhereInput(sourceFile, model, dmmf);
-  generateScalarWhereInput(sourceFile, model);
-  generateRelationFilter(sourceFile, model);
-  generateWhereUniqueInput(sourceFile, model);
+  generateWhereInput(sourceFile, model, dmmf, extraModelImports);
+  generateScalarWhereInput(sourceFile, model, extraModelImports);
+  generateWhereUniqueInput(sourceFile, model, extraModelImports);
+  generateRelationFilter(project, moduleDir, model, extraModelImports);
 }
 
-const generateWhereInput = (sourceFile: SourceFile, model: PrismaDMMF.Model, dmmf: PrismaDMMF.Document) => {
+const generateWhereInput = (
+  sourceFile: SourceFile,
+  model: PrismaDMMF.Model,
+  dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
+) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-where.input`,
+    namedImports: new Set([`${model.name}WhereInput`]),
+  });
   const properties = model.fields
     .filter((field) => ['scalar', 'enum'].includes(field.kind) && field.type !== 'Json')
     .map<OptionalKind<PropertyDeclarationStructure>>((field) => {
@@ -110,10 +145,10 @@ const generateWhereInput = (sourceFile: SourceFile, model: PrismaDMMF.Model, dmm
   model.fields
     .filter((field) => field.kind === 'object' && field.relationName)
     .forEach((field) => {
-      const decorators = getDecoratorsWhereInputByRelationType(field, dmmf);
+      const decorators = getDecoratorsWhereInputByRelationType(model, field, dmmf);
       properties.push({
         name: field.name,
-        type: getTSDataTypeWhereInputFromRelationType(field, dmmf),
+        type: getTSDataTypeWhereInputFromRelationType(model, field, dmmf),
         decorators,
         hasQuestionToken: true,
         trailingTrivia: '\r\n',
@@ -234,7 +269,15 @@ const generateWhereInput = (sourceFile: SourceFile, model: PrismaDMMF.Model, dmm
   });
 };
 
-const generateScalarWhereInput = (sourceFile: SourceFile, model: PrismaDMMF.Model) => {
+const generateScalarWhereInput = (
+  sourceFile: SourceFile,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-where.input`,
+    namedImports: new Set([`${model.name}ScalarWhereInput`]),
+  });
   const properties = model.fields
     .filter((field) => ['scalar', 'enum'].includes(field.kind) && field.type !== 'Json')
     .map<OptionalKind<PropertyDeclarationStructure>>((field) => {
@@ -362,180 +405,15 @@ const generateScalarWhereInput = (sourceFile: SourceFile, model: PrismaDMMF.Mode
   });
 };
 
-function generateRelationFilter(sourceFile: SourceFile, model: PrismaDMMF.Model) {
-  sourceFile.addClass({
-    name: `${model.name}ListRelationFilter`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'every',
-        type: `${model.name}WhereInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereInput, required: false, nullable: false }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'IsNotNull',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereInput`],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'some',
-        type: `${model.name}WhereInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereInput, required: false, nullable: false }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'IsNotNull',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereInput`],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'none',
-        type: `${model.name}WhereInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereInput, required: false, nullable: false }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'IsNotNull',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereInput`],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
+export const generateWhereUniqueInput = (
+  sourceFile: SourceFile,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-where.input`,
+    namedImports: new Set([`${model.name}WhereUniqueInput`]),
   });
-
-  sourceFile.addClass({
-    name: `${model.name}RelationFilter`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'is',
-        type: `${model.name}WhereInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereInput, required: false, nullable: false }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'IsNotNull',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereInput`],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'isNot',
-        type: `${model.name}WhereInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereInput, required: false, nullable: false }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'IsNotNull',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereInput`],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-}
-
-export const generateWhereUniqueInput = (sourceFile: SourceFile, model: PrismaDMMF.Model) => {
   sourceFile.addClass({
     name: `${model.name}WhereUniqueInput`,
     isExported: true,
@@ -852,13 +730,17 @@ export const getDecoratorsWhereInputByScalarAndEnumType = (field: PrismaDMMF.Fie
   return decorators;
 };
 
-export const getTSDataTypeWhereInputFromRelationType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
+export const getTSDataTypeWhereInputFromRelationType = (
+  model: PrismaDMMF.Model,
+  field: PrismaDMMF.Field,
+  dmmf: PrismaDMMF.Document,
+) => {
   if (field.kind === 'object' && field.relationName) {
     const relatedModel = dmmf.datamodel.models.find((model) => model.name === field.type);
     if (!relatedModel) {
       throw new Error(`Model ${field.type} not found`);
     }
-    const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
+    const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
     if (relatedField !== undefined) {
       if (field.isList) {
         return `${relatedModel.name}ListRelationFilter`;
@@ -871,14 +753,18 @@ export const getTSDataTypeWhereInputFromRelationType = (field: PrismaDMMF.Field,
   throw new Error('Unknown relation type');
 };
 
-export const getDecoratorsWhereInputByRelationType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
+export const getDecoratorsWhereInputByRelationType = (
+  model: PrismaDMMF.Model,
+  field: PrismaDMMF.Field,
+  dmmf: PrismaDMMF.Document,
+) => {
   const decorators: OptionalKind<DecoratorStructure>[] = [];
   if (field.kind === 'object' && field.relationName) {
     const relatedModel = dmmf.datamodel.models.find((model) => model.name === field.type);
     if (!relatedModel) {
       throw new Error(`Model ${field.type} not found`);
     }
-    const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
+    const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
     if (relatedField !== undefined) {
       if (field.isList) {
         decorators.push({
@@ -916,23 +802,4 @@ export const getDecoratorsWhereInputByRelationType = (field: PrismaDMMF.Field, d
     arguments: [],
   });
   return decorators;
-};
-
-export const getImportDeclarationsFromRelationType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
-  if (field.kind === 'object' && field.relationName) {
-    const relatedModel = dmmf.datamodel.models.find((model) => model.name === field.type);
-    if (!relatedModel) {
-      throw new Error(`Model ${field.type} not found`);
-    }
-    const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
-    if (relatedField !== undefined) {
-      if (field.isList) {
-        return [`${relatedModel.name}ListRelationFilter`];
-      } else {
-        return [`${relatedModel.name}RelationFilter`, `${relatedModel.name}WhereInput`];
-      }
-    }
-  }
-  console.log('Unknown relation type: ', field);
-  throw new Error('Unknown relation type');
 };

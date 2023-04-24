@@ -1,3 +1,5 @@
 {
-  "BracketHighlighter.enableExtension": false
+  "BracketHighlighter.enableExtension": false,
+  "javascript.preferences.importModuleSpecifier": "relative",
+  "typescript.preferences.importModuleSpecifier": "relative"
 }

@@ -10,13 +10,20 @@ import {
   SourceFile,
   DecoratorStructure,
 } from 'ts-morph';
-import { generatePrismaImport, shouldImportPrisma } from './helpers';
+import {
+  ImportDeclarationType,
+  filterRelatedField,
+  generatePrismaImport,
+  shouldImportPrisma,
+  updateSetImports,
+} from './helpers';
 
 export async function generateOrderByInput(
   project: Project,
   moduleDir: string,
   model: PrismaDMMF.Model,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) {
   const dirPath = path.resolve(moduleDir, 'dto');
   const filePath = path.resolve(dirPath, `${paramCase(model.name)}-order-by.input.ts`);
@@ -50,12 +57,12 @@ export async function generateOrderByInput(
 
   const relationImports = new Set<OptionalKind<ImportDeclarationStructure>>();
   model.fields.forEach((field) => {
-    if (field.relationName && field.kind === 'object') {
+    if (field.relationName && field.kind === 'object' && field.type !== model.name) {
       const relatedModel = dmmf.datamodel.models.find((model) => model.name === field.type);
       if (!relatedModel) {
         throw new Error(`Model ${field.type} not found`);
       }
-      const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
+      const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
       if (relatedField !== undefined) {
         if (!field.isList) {
           relationImports.add({
@@ -69,14 +76,19 @@ export async function generateOrderByInput(
 
   sourceFile.addImportDeclarations(Array.from(relationImports));
 
-  generateOrderByWithRelationInput(sourceFile, model, dmmf);
+  generateOrderByWithRelationInput(sourceFile, model, dmmf, extraModelImports);
 }
 
 const generateOrderByWithRelationInput = (
   sourceFile: SourceFile,
   model: PrismaDMMF.Model,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-order-by.input`,
+    namedImports: new Set([`${model.name}OrderByWithRelationInput`]),
+  });
   sourceFile.addClass({
     name: `${model.name}OrderByWithRelationInput`,
     isExported: true,
@@ -87,10 +99,10 @@ const generateOrderByWithRelationInput = (
       },
     ],
     properties: model.fields.map<OptionalKind<PropertyDeclarationStructure>>((field) => {
-      const decorators = getDecoratorsOrderByType(field, dmmf);
+      const decorators = getDecoratorsOrderByType(model, field, dmmf);
       return {
         name: field.name,
-        type: getOrderByType(field, dmmf),
+        type: getOrderByType(model, field, dmmf),
         decorators,
         hasQuestionToken: true,
         trailingTrivia: '\r\n',
@@ -100,7 +112,7 @@ const generateOrderByWithRelationInput = (
   });
 };
 
-const getOrderByType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
+const getOrderByType = (model: PrismaDMMF.Model, field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
   if (['scalar', 'enum'].includes(field.kind)) {
     return `SortOrder`;
   } else if (field.kind === 'object' && field.relationName) {
@@ -108,7 +120,7 @@ const getOrderByType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
     if (!relatedModel) {
       throw new Error(`Model ${field.type} not found`);
     }
-    const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
+    const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
     if (relatedField !== undefined) {
       if (field.isList) {
         return `OrderByRelationAggregateInput`;
@@ -120,7 +132,7 @@ const getOrderByType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
   throw new Error(`Unknown field kind: ${field.kind}`);
 };
 
-const getDecoratorsOrderByType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
+const getDecoratorsOrderByType = (model: PrismaDMMF.Model, field: PrismaDMMF.Field, dmmf: PrismaDMMF.Document) => {
   const decorators: OptionalKind<DecoratorStructure>[] = [];
   if (['scalar', 'enum'].includes(field.kind)) {
     decorators.push({
@@ -136,7 +148,7 @@ const getDecoratorsOrderByType = (field: PrismaDMMF.Field, dmmf: PrismaDMMF.Docu
     if (!relatedModel) {
       throw new Error(`Model ${field.type} not found`);
     }
-    const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
+    const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
     if (relatedField !== undefined) {
       if (field.isList) {
         decorators.push({

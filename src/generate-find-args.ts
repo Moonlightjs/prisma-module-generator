@@ -3,13 +3,20 @@ import { paramCase } from 'change-case';
 import * as path from 'path';
 import { OptionalKind, Project, PropertyDeclarationStructure, Scope, SourceFile } from 'ts-morph';
 import {
+  ImportDeclarationType,
   generateClassValidatorImport,
   generatePrismaImport,
   getDecoratorsImportsByType,
   shouldImportPrisma,
+  updateSetImports,
 } from './helpers';
 
-export async function generateFindArgs(project: Project, moduleDir: string, model: PrismaDMMF.Model) {
+export async function generateFindArgs(
+  project: Project,
+  moduleDir: string,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) {
   const dirPath = path.resolve(moduleDir, 'dto');
   const filePath = path.resolve(dirPath, `${paramCase(model.name)}-find.args.ts`);
   const sourceFile = project.createSourceFile(filePath, undefined, {
@@ -51,11 +58,19 @@ export async function generateFindArgs(project: Project, moduleDir: string, mode
     namedImports: ['IsNotNull', 'getEnumValues'],
   });
 
-  generateFindFirstArgs(sourceFile, model);
-  generateFindManyArgs(sourceFile, model);
+  generateFindFirstArgs(sourceFile, model, extraModelImports);
+  generateFindManyArgs(sourceFile, model, extraModelImports);
 }
 
-const generateFindFirstArgs = (sourceFile: SourceFile, model: PrismaDMMF.Model) => {
+const generateFindFirstArgs = (
+  sourceFile: SourceFile,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-find.args`,
+    namedImports: new Set([`${model.name}FindFirstArgs`]),
+  });
   sourceFile.addClass({
     name: `${model.name}FindFirstArgs`,
     isExported: true,
@@ -257,7 +272,15 @@ const generateFindFirstArgs = (sourceFile: SourceFile, model: PrismaDMMF.Model) 
   });
 };
 
-const generateFindManyArgs = (sourceFile: SourceFile, model: PrismaDMMF.Model) => {
+const generateFindManyArgs = (
+  sourceFile: SourceFile,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-find.args`,
+    namedImports: new Set([`${model.name}FindManyArgs`]),
+  });
   sourceFile.addClass({
     name: `${model.name}FindManyArgs`,
     isExported: true,

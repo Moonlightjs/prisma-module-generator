@@ -13,11 +13,13 @@ import { generateModuleFile, generateModuleIndexFile } from './generate-module';
 import { generateServiceFile } from './generate-service';
 import { generateUpdateInput } from './generate-update-input';
 import { generateWhereInputs } from './generate-where-input';
-import { generateEnumFiltersIndexFile, generateEnumsIndexFile } from './helpers';
+import { ImportDeclarationType, generateEnumFiltersIndexFile, generateEnumsIndexFile } from './helpers';
 import { project } from './project';
 import { generateOrderByInput } from './generate-order-by';
 import { generateScalarFieldEnum } from './generate-scalar-field-enum';
 import { generateFindArgs } from './generate-find-args';
+import { OptionalKind, ImportDeclarationStructure } from 'ts-morph';
+import generateNamespaceExtraModels from './generate-namespace-extra-model';
 
 export async function generate(options: GeneratorOptions) {
   try {
@@ -34,11 +36,13 @@ export async function generate(options: GeneratorOptions) {
       previewFeatures: prismaClientProvider?.previewFeatures,
     });
 
+    const extraModelImports = new Set<ImportDeclarationType>();
+
     const enumNames = new Set<string>();
     prismaClientDmmf.datamodel.enums.forEach((enumItem) => {
       enumNames.add(enumItem.name);
       generateEnum(project, outputDir, enumItem);
-      generateEnumFilter(project, outputDir, enumItem);
+      generateEnumFilter(project, outputDir, enumItem, extraModelImports);
     });
 
     if (enumNames.size > 0) {
@@ -61,16 +65,16 @@ export async function generate(options: GeneratorOptions) {
       await fs.mkdir(moduleDir, { recursive: true });
       await removeDir(moduleDir, true);
       // gererate dto files
-      await generateAdminDto(project, moduleDir, model);
-      await generateDto(project, moduleDir, model);
+      await generateAdminDto(project, moduleDir, model, extraModelImports);
+      await generateDto(project, moduleDir, model, extraModelImports);
       // await generateCreateAdminInputBase(project, moduleDir, model);
-      await generateCreateInput(project, moduleDir, model, prismaClientDmmf);
+      await generateCreateInput(project, moduleDir, model, prismaClientDmmf, extraModelImports);
       // await generateAdminUpdateInputBase(project, moduleDir, model);
-      await generateUpdateInput(project, moduleDir, model, prismaClientDmmf);
-      await generateWhereInputs(project, moduleDir, model, prismaClientDmmf);
-      await generateOrderByInput(project, moduleDir, model, prismaClientDmmf);
+      await generateUpdateInput(project, moduleDir, model, prismaClientDmmf, extraModelImports);
+      await generateWhereInputs(project, moduleDir, model, prismaClientDmmf, extraModelImports);
+      await generateOrderByInput(project, moduleDir, model, prismaClientDmmf, extraModelImports);
       await generateScalarFieldEnum(project, moduleDir, model);
-      await generateFindArgs(project, moduleDir, model);
+      await generateFindArgs(project, moduleDir, model, extraModelImports);
       await generateDtosIndexFile(project, moduleDir, model);
 
       // gererate service file
@@ -85,6 +89,8 @@ export async function generate(options: GeneratorOptions) {
       await generateModuleIndexFile(project, moduleDir, model);
     });
     await Promise.all(promifyCreateModule);
+
+    await generateNamespaceExtraModels(project, outputDir, extraModelImports);
 
     // const helpersIndexSourceFile = project.createSourceFile(
     //   path.resolve(outputDir, 'helpers', 'index.ts'),

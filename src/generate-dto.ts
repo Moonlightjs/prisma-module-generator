@@ -9,9 +9,21 @@ import {
   PropertyDeclarationStructure,
   Scope,
 } from 'ts-morph';
-import { generateEnumImports, generatePrismaImport, getDefaultValueFromFieldType, shouldImportPrisma } from './helpers';
+import {
+  ImportDeclarationType,
+  generateEnumImports,
+  generatePrismaImport,
+  getDefaultValueFromFieldType,
+  shouldImportPrisma,
+  updateSetImports,
+} from './helpers';
 
-export async function generateAdminDto(project: Project, moduleDir: string, model: PrismaDMMF.Model) {
+export async function generateAdminDto(
+  project: Project,
+  moduleDir: string,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) {
   const dirPath = path.resolve(moduleDir, 'dto');
   const filePath = path.resolve(dirPath, `admin-${paramCase(model.name)}.dto.ts`);
   const sourceFile = project.createSourceFile(filePath, undefined, {
@@ -33,16 +45,21 @@ export async function generateAdminDto(project: Project, moduleDir: string, mode
 
   const relationImports = new Set<OptionalKind<ImportDeclarationStructure>>();
   model.fields.forEach((field) => {
-    if (field.relationName && field.kind === 'object') {
+    if (field.relationName && field.kind === 'object' && field.type !== model.name) {
       relationImports.add({
-        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}.dto`,
-        namedImports: [field.type + 'Dto'],
+        moduleSpecifier: `../../${paramCase(field.type)}/dto/admin-${paramCase(field.type)}.dto`,
+        namedImports: ['Admin' + field.type + 'Dto'],
       });
     }
   });
   sourceFile.addImportDeclarations(Array.from(relationImports));
 
   generateEnumImports(sourceFile, model.fields);
+
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/admin-${paramCase(model.name)}.dto`,
+    namedImports: new Set([`Admin${model.name}Dto`]),
+  });
 
   sourceFile.addClass({
     name: `Admin${model.name}Dto`,
@@ -57,11 +74,11 @@ export async function generateAdminDto(project: Project, moduleDir: string, mode
       ...model.fields.map<OptionalKind<PropertyDeclarationStructure>>((field) => {
         return {
           name: field.name,
-          type: getTSDataTypeDtoFromFieldType(field),
-          hasExclamationToken: field.isRequired,
+          type: getTSDataTypeAdminDtoFromFieldType(field),
+          hasExclamationToken: !field.default && field.isRequired,
           hasQuestionToken: !field.isRequired,
           trailingTrivia: '\r\n',
-          decorators: getDecoratorsDtoByFieldType(field),
+          decorators: getDecoratorsAdminDtoByFieldType(field),
           initializer: field.default ? getDefaultValueFromFieldType(field) : undefined,
           isReadonly: true,
           scope: Scope.Public,
@@ -71,7 +88,12 @@ export async function generateAdminDto(project: Project, moduleDir: string, mode
   });
 }
 
-export async function generateDto(project: Project, moduleDir: string, model: PrismaDMMF.Model) {
+export async function generateDto(
+  project: Project,
+  moduleDir: string,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) {
   const dirPath = path.resolve(moduleDir, 'dto');
   const filePath = path.resolve(dirPath, `${paramCase(model.name)}.dto.ts`);
   const sourceFile = project.createSourceFile(filePath, undefined, {
@@ -93,7 +115,7 @@ export async function generateDto(project: Project, moduleDir: string, model: Pr
 
   const relationImports = new Set<OptionalKind<ImportDeclarationStructure>>();
   model.fields.forEach((field) => {
-    if (field.relationName && field.kind === 'object') {
+    if (field.relationName && field.kind === 'object' && field.type !== model.name) {
       relationImports.add({
         moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}.dto`,
         namedImports: [field.type + 'Dto'],
@@ -103,6 +125,11 @@ export async function generateDto(project: Project, moduleDir: string, model: Pr
   sourceFile.addImportDeclarations(Array.from(relationImports));
 
   generateEnumImports(sourceFile, model.fields);
+
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}.dto`,
+    namedImports: new Set([`${model.name}Dto`]),
+  });
 
   sourceFile.addClass({
     name: `${model.name}Dto`,
@@ -118,7 +145,7 @@ export async function generateDto(project: Project, moduleDir: string, model: Pr
         return {
           name: field.name,
           type: getTSDataTypeDtoFromFieldType(field),
-          hasExclamationToken: field.isRequired,
+          hasExclamationToken: !field.default && field.isRequired,
           hasQuestionToken: !field.isRequired,
           trailingTrivia: '\r\n',
           decorators: getDecoratorsDtoByFieldType(field),
@@ -130,6 +157,54 @@ export async function generateDto(project: Project, moduleDir: string, model: Pr
     ],
   });
 }
+
+export const getTSDataTypeAdminDtoFromFieldType = (field: PrismaDMMF.Field) => {
+  let type = field.type;
+  switch (field.type) {
+    case 'Int':
+    case 'Float':
+      type = 'number';
+      break;
+    case 'DateTime':
+      type = 'Date';
+      break;
+    case 'String':
+      type = 'string';
+      break;
+    case 'Boolean':
+      type = 'boolean';
+      break;
+    case 'Decimal':
+      type = 'any';
+      break;
+    case 'Json':
+      type = 'Prisma.JsonValue';
+      break;
+    case 'BigInt':
+      type = 'bigint';
+      break;
+    case 'Bytes':
+      type = `ArrayBuffer`;
+      break;
+    default:
+      // #model
+      if (field.kind === 'object') {
+        console.log(`${field.name} is a relation field that references ${field.type}`);
+        type = `Admin${field.type}Dto`;
+      } else {
+        console.log(`${field.name} is a scalar field`);
+        type = `${field.type}`;
+      }
+      break;
+  }
+  if (!field.isRequired) {
+    type = `${type} | null`;
+  }
+  if (field.isList) {
+    type = `${type}[]`;
+  }
+  return type;
+};
 
 export const getTSDataTypeDtoFromFieldType = (field: PrismaDMMF.Field) => {
   let type = field.type;
@@ -177,6 +252,69 @@ export const getTSDataTypeDtoFromFieldType = (field: PrismaDMMF.Field) => {
     type = `${type}[]`;
   }
   return type;
+};
+
+export const getDecoratorsAdminDtoByFieldType = (field: PrismaDMMF.Field) => {
+  const decorators: OptionalKind<DecoratorStructure>[] = [];
+  decorators.push(getDecoratorSwaggerAdminDtoByFieldType(field));
+  decorators.push({
+    name: 'Expose',
+    arguments: [],
+  });
+  return decorators;
+};
+
+export const getDecoratorSwaggerAdminDtoByFieldType = (field: PrismaDMMF.Field): OptionalKind<DecoratorStructure> => {
+  const name = 'ApiProperty';
+  let type = '';
+  let required: 'true' | 'false' = 'true';
+  let nullable: 'true' | 'false' = 'false';
+  if (!field.isRequired) {
+    required = 'false';
+    nullable = 'true';
+  }
+  switch (field.type) {
+    case 'Int':
+    case 'BigInt':
+      type = `'integer'`;
+      break;
+    case 'DateTime':
+      type = `() => Date`;
+      break;
+    case 'String':
+      type = `'string'`;
+      break;
+    case 'Boolean':
+      type = `'boolean'`;
+      break;
+    case 'Float':
+      type = `'float'`;
+      break;
+    case 'Decimal':
+      type = `'double'`;
+      break;
+    case 'Bytes':
+      type = `number'`;
+      break;
+    case 'Json':
+      type = `'object'`;
+      break;
+    default:
+      if (field.kind === 'enum') {
+        type = `'string'`;
+      } else if (field.kind === 'object') {
+        type = `() => Admin${field.type}Dto`;
+      }
+      break;
+  }
+  return {
+    name,
+    arguments: [
+      `{ type: ${type}, required: ${required}, nullable: ${nullable}${field.isList ? ', isArray: true' : ''}${
+        field.kind === `enum` ? `, enum: ${field.type}` : ''
+      } }`,
+    ],
+  };
 };
 
 export const getDecoratorsDtoByFieldType = (field: PrismaDMMF.Field) => {

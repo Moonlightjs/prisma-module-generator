@@ -7,6 +7,7 @@ try {
   fs.copySync('./dist/', './module');
   fs.copySync('./package.json', './module/package.json');
   fs.copySync('./.npmrc', './module/.npmrc');
+  fs.copySync('./.npmignore', './module/.npmignore');
 } catch (err) {
   console.log(err);
 }

@@ -273,7 +273,7 @@ findAllPagination(
   status: HttpStatus.OK,
   model: CountDto,
 })
-@Get()
+@Get('/count')
 count(@Query() params: Prisma.${model.name}FindFirstArgs) {
   return this.${camelCase(model.name)}Service.count(params?.where);
 }

@@ -12,18 +12,30 @@ import {
 } from 'ts-morph';
 import { getTSDataTypeInputFromScalarAndEnumFieldType } from './generate-create-input';
 import {
+  ImportDeclarationType,
+  filterRelatedField,
   generateClassValidatorImport,
   generateEnumImports,
   generatePrismaImport,
   getDecoratorsImportsByType,
   shouldImportPrisma,
+  updateSetImports,
 } from './helpers';
+import { generateUpsertWithWhereUniqueWithoutFieldInput } from './generate-upsert-with-where-unique-without-field-input';
+import { generateUpsertWithoutFieldInput } from './generate-upsert-without-field-input';
+import { generateUpdateOneWithoutFieldNestedInput } from './generate-update-one-without-field-nested-input';
+import { generateUpdateOneRequiredWithoutFieldNestedInput } from './generate-update-one-required-without-field-nested-input';
+import {
+  generateUpdateManyWithoutFieldNestedInputOneToMany,
+  generateUpdateManyWithoutFieldNestedInputManyToMany,
+} from './generate-update-many-without-field-nested-input';
 
 export function generateUpdateInput(
   project: Project,
   moduleDir: string,
   model: PrismaDMMF.Model,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) {
   const dirPath = path.resolve(moduleDir, 'dto');
   const filePath = path.resolve(dirPath, `${paramCase(model.name)}-update.input.ts`);
@@ -63,36 +75,45 @@ export function generateUpdateInput(
     namedImports: [`${model.name}WhereUniqueInput`],
   });
 
-  const relationImports = new Set<OptionalKind<ImportDeclarationStructure>>();
+  const relationImports = new Set<ImportDeclarationType>();
   model.fields.forEach((field) => {
     if (field.relationName && field.kind === 'object') {
-      console.log(`🚀 ~ file: generate-update-input.ts:93 ~ model ${model.name} ~ field:`, field);
-      relationImports.add({
-        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(field.type)}-update.input`,
-        namedImports: [getTSDataTypeUpdateInputFromRelationFieldType(model, field, dmmf)],
+      updateSetImports(relationImports, {
+        moduleSpecifier: `../../${paramCase(field.type)}/dto/${paramCase(
+          getTSDataTypeUpdateInputFromRelationFieldType(model, field, dmmf),
+        ).replace('-input', '.input')}`,
+        namedImports: new Set([getTSDataTypeUpdateInputFromRelationFieldType(model, field, dmmf)]),
       });
     }
   });
-  sourceFile.addImportDeclarations(Array.from(relationImports));
 
-  generateUpdateBaseInput(sourceFile, model);
+  generateUpdateBaseInput(sourceFile, model, extraModelImports);
 
   model.fields
     .filter((field) => field.kind === 'object' && dmmf.datamodel.models.some((model) => model.name === field.type))
     .forEach((field) => {
-      const relationCreateImports = new Set<string>();
-      relationCreateImports.add(`${model.name}CreateWithout${pascalCase(field.name)}Input`);
-      relationCreateImports.add(`${model.name}CreateOrConnectWithout${pascalCase(field.name)}Input`);
-      if (field.relationFromFields && field.relationFromFields.length > 0) {
-        relationCreateImports.add(`${model.name}CreateMany${pascalCase(field.name)}InputEnvelope`);
-      }
-      sourceFile.addImportDeclaration({
-        moduleSpecifier: `./${paramCase(model.name)}-create.input`,
-        namedImports: Array.from(relationCreateImports),
-      });
+      // updateSetImports(relationImports, {
+      //   moduleSpecifier: `./${paramCase(model.name)}-create.input`,
+      //   namedImports: new Set([
+      //     `${model.name}CreateWithout${pascalCase(field.name)}Input`,
+      //     `${model.name}CreateOrConnectWithout${pascalCase(field.name)}Input`,
+      //   ]),
+      // });
+      // if (field.relationFromFields && field.relationFromFields.length > 0) {
+      //   updateSetImports(relationImports, {
+      //     moduleSpecifier: `./${paramCase(model.name)}-create-many-${paramCase(field.name)}.input-envelope`,
+      //     namedImports: new Set([`${model.name}CreateMany${pascalCase(field.name)}InputEnvelope`]),
+      //   });
+      // }
 
-      generateUpdateWithoutFieldInput(sourceFile, model, field, dmmf);
-      generateUpdateWithWhereUniqueWithoutFieldInput(sourceFile, model, field);
+      generateUpdateWithoutFieldInput(sourceFile, model, field, dmmf, extraModelImports);
+      generateUpdateWithWhereUniqueWithoutFieldInput(sourceFile, model, field, extraModelImports);
+
+      if (field.isList) {
+        generateUpsertWithoutFieldInput(project, moduleDir, model, field, extraModelImports);
+      } else {
+        generateUpsertWithWhereUniqueWithoutFieldInput(project, moduleDir, model, field, extraModelImports);
+      }
 
       if (field.isList) {
         let createUpdateInputRequired = false;
@@ -106,28 +127,36 @@ export function generateUpdateInput(
           }
         }
         if (createUpdateInputRequired) {
-          generateUpdateOneRequiredWithoutFieldNestedInput(sourceFile, model, field);
+          generateUpdateOneRequiredWithoutFieldNestedInput(project, moduleDir, model, field, extraModelImports);
         } else {
-          generateUpdateOneWithoutFieldNestedInput(sourceFile, model, field);
+          generateUpdateOneWithoutFieldNestedInput(project, moduleDir, model, field, extraModelImports);
         }
       } else {
         if (field.relationFromFields && field.relationFromFields.length > 0) {
-          generateUpdateManyWithoutFieldNestedInputOneToMany(sourceFile, model, field);
+          generateUpdateManyWithoutFieldNestedInputOneToMany(project, moduleDir, model, field, extraModelImports);
         } else {
-          generateUpdateManyWithoutFieldNestedInputManyToMany(sourceFile, model, field);
+          generateUpdateManyWithoutFieldNestedInputManyToMany(project, moduleDir, model, field, extraModelImports);
         }
       }
-      if (field.isList) {
-        generateUpsertWithoutFieldInput(sourceFile, model, field);
-      } else {
-        generateUpsertWithWhereUniqueWithoutFieldInput(sourceFile, model, field);
-      }
     });
-
-  generateModelUpdateInput(sourceFile, model, dmmf);
+  Array.from(relationImports).forEach((importDeclaration) => {
+    sourceFile.addImportDeclaration({
+      moduleSpecifier: importDeclaration.moduleSpecifier,
+      namedImports: Array.from(importDeclaration.namedImports),
+    });
+  });
+  generateModelUpdateInput(sourceFile, model, dmmf, extraModelImports);
 }
 
-export const generateUpdateBaseInput = (sourceFile: SourceFile, model: PrismaDMMF.Model) => {
+export const generateUpdateBaseInput = (
+  sourceFile: SourceFile,
+  model: PrismaDMMF.Model,
+  extraModelImports: Set<ImportDeclarationType>,
+) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-update.input`,
+    namedImports: new Set([`${model.name}UpdateInputBase`]),
+  });
   sourceFile.addClass({
     name: `${model.name}UpdateInputBase`,
     isExported: true,
@@ -168,7 +197,12 @@ export const generateUpdateWithoutFieldInput = (
   model: PrismaDMMF.Model,
   filedIgnore: PrismaDMMF.Field,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-update.input`,
+    namedImports: new Set([`${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`]),
+  });
   sourceFile.addClass({
     name: `${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`,
     extends: `${model.name}UpdateInputBase`,
@@ -201,7 +235,12 @@ export const generateUpdateWithWhereUniqueWithoutFieldInput = (
   sourceFile: SourceFile,
   model: PrismaDMMF.Model,
   filedIgnore: PrismaDMMF.Field,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-update.input`,
+    namedImports: new Set([`${model.name}UpdateWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input`]),
+  });
   sourceFile.addClass({
     name: `${model.name}UpdateWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input`,
     isExported: true,
@@ -280,1295 +319,16 @@ export const generateUpdateWithWhereUniqueWithoutFieldInput = (
   });
 };
 
-export const generateUpsertWithoutFieldInput = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}UpsertWithout${pascalCase(filedIgnore.name)}Input`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'update',
-        type: `${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasExclamationToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpdateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: true, nullable: false }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsDefined',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasExclamationToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: true, nullable: false }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsDefined',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
-export const generateUpsertWithWhereUniqueWithoutFieldInput = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}UpsertWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'where',
-        type: `${model.name}WhereUniqueInput`,
-        hasExclamationToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereUniqueInput, required: true, nullable: false }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsDefined',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'update',
-        type: `${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasExclamationToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpdateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: true, nullable: false }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsDefined',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasExclamationToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: true, nullable: false }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsDefined',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
-export const generateUpdateManyWithoutFieldNestedInputManyToMany = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}UpdateManyWithout${pascalCase(filedIgnore.name)}NestedInput`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connectOrCreate',
-        type: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateOrConnectWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connect',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'upsert',
-        type: `${model.name}UpsertWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpsertWithWhereUniqueWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpsertWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'set',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'disconnect',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'delete',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'update',
-        type: `${model.name}UpdateWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpdateWithWhereUniqueWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpdateWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      // @todo: add updateMany and deleteMany
-    ],
-  });
-};
-
-export const generateUpdateManyWithoutFieldNestedInputOneToMany = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}UpdateManyWithout${pascalCase(filedIgnore.name)}NestedInput`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connectOrCreate',
-        type: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateOrConnectWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'createMany',
-        type: `${model.name}CreateMany${pascalCase(filedIgnore.name)}InputEnvelope`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateMany${pascalCase(
-                filedIgnore.name,
-              )}InputEnvelope, required: false, nullable: true, }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateMany${pascalCase(filedIgnore.name)}InputEnvelope`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connect',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'upsert',
-        type: `${model.name}UpsertWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpsertWithWhereUniqueWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpsertWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'set',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'disconnect',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'delete',
-        type: `${model.name}WhereUniqueInput[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'update',
-        type: `${model.name}UpdateWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input[]`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpdateWithWhereUniqueWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true, isArray: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: ['{ each: true }'],
-          },
-          {
-            name: 'IsArray',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpdateWithWhereUniqueWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      // @todo: add updateMany and deleteMany
-    ],
-  });
-};
-
-export const generateUpdateOneWithoutFieldNestedInput = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}UpdateOneWithout${pascalCase(filedIgnore.name)}NestedInput`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connectOrCreate',
-        type: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateOrConnectWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connect',
-        type: `${model.name}WhereUniqueInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [''],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'upsert',
-        type: `${model.name}UpsertWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpsertWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpsertWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'disconnect',
-        type: `boolean`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: 'boolean', required: false, nullable: true }`],
-          },
-          {
-            name: 'IsBoolean',
-            arguments: [],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'delete',
-        type: `boolean`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: 'boolean', required: false, nullable: true }`],
-          },
-          {
-            name: 'IsBoolean',
-            arguments: [],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'update',
-        type: `${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpdateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
-export const generateUpdateOneRequiredWithoutFieldNestedInput = (
-  sourceFile: SourceFile,
-  model: PrismaDMMF.Model,
-  filedIgnore: PrismaDMMF.Field,
-) => {
-  sourceFile.addClass({
-    name: `${model.name}UpdateRequiredOneWithout${pascalCase(filedIgnore.name)}NestedInput`,
-    isExported: true,
-    decorators: [
-      {
-        name: 'Expose',
-        arguments: [],
-      },
-    ],
-    properties: [
-      {
-        name: 'create',
-        type: `${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connectOrCreate',
-        type: `${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}CreateOrConnectWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}CreateOrConnectWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'connect',
-        type: `${model.name}WhereUniqueInput`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [`{ type: () => ${model.name}WhereUniqueInput, required: false, nullable: true }`],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [''],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}WhereUniqueInput`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'upsert',
-        type: `${model.name}UpsertWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpsertWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpsertWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-      {
-        name: 'update',
-        type: `${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`,
-        hasQuestionToken: true,
-        trailingTrivia: '\r\n',
-        scope: Scope.Public,
-        isReadonly: true,
-        decorators: [
-          {
-            name: 'ApiProperty',
-            arguments: [
-              `{ type: () => ${model.name}UpdateWithout${pascalCase(
-                filedIgnore.name,
-              )}Input, required: false, nullable: true }`,
-            ],
-          },
-          {
-            name: 'ValidateNested',
-            arguments: [],
-          },
-          {
-            name: 'Type',
-            arguments: [`() => ${model.name}UpdateWithout${pascalCase(filedIgnore.name)}Input`],
-          },
-          {
-            name: 'IsOptional',
-            arguments: [],
-          },
-          {
-            name: 'Expose',
-            arguments: [],
-          },
-        ],
-      },
-    ],
-  });
-};
-
 export const generateModelUpdateInput = (
   sourceFile: SourceFile,
   model: PrismaDMMF.Model,
   dmmf: PrismaDMMF.Document,
+  extraModelImports: Set<ImportDeclarationType>,
 ) => {
+  updateSetImports(extraModelImports, {
+    moduleSpecifier: `./modules/${paramCase(model.name)}/dto/${paramCase(model.name)}-update.input`,
+    namedImports: new Set([`${model.name}UpdateInput`]),
+  });
   sourceFile.addClass({
     name: `${model.name}UpdateInput`,
     extends: `${model.name}UpdateInputBase`,
@@ -1609,7 +369,7 @@ export const getTSDataTypeUpdateInputFromRelationFieldType = (
     if (!relatedModel) {
       throw new Error(`Model ${field.type} not found`);
     }
-    const relatedField = relatedModel.fields.find((f) => f.relationName === field.relationName);
+    const relatedField = relatedModel.fields.find(filterRelatedField(field, model, relatedModel));
     if (relatedField !== undefined) {
       if (field.isList) {
         console.log(
